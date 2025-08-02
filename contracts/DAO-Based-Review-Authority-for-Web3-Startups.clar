@@ -3,6 +3,8 @@
 (define-constant ERR-NOT-REGISTERED (err u102))
 (define-constant ERR-INVALID-SCORE (err u103))
 (define-constant ERR-ALREADY-VOTED (err u104))
+(define-constant ERR-SELF-DELEGATION (err u105))
+(define-constant ERR-INVALID-DELEGATE (err u106))
 
 (define-data-var min-reviewer-stake uint u10000)
 (define-data-var voting-period uint u144)
@@ -37,6 +39,14 @@
   }
 )
 
+(define-map delegations
+  principal
+  {
+    delegate: principal,
+    delegated-at: uint
+  }
+)
+
 (define-read-only (get-startup-details (startup-id principal))
   (match (map-get? startups startup-id)
     startup (ok startup)
@@ -48,6 +58,17 @@
   (match (map-get? reviewers reviewer-id)
     reviewer (ok reviewer)
     (err ERR-NOT-REGISTERED)
+  )
+)
+
+(define-read-only (get-delegation (delegator principal))
+  (map-get? delegations delegator)
+)
+
+(define-read-only (get-effective-reviewer (original-reviewer principal))
+  (match (map-get? delegations original-reviewer)
+    delegation (get delegate delegation)
+    original-reviewer
   )
 )
 
@@ -82,15 +103,35 @@
   )
 )
 
+(define-public (delegate-to (delegate-address principal))
+  (let ((delegator-reviewer (unwrap! (map-get? reviewers tx-sender) ERR-NOT-AUTHORIZED))
+        (delegate-reviewer (unwrap! (map-get? reviewers delegate-address) ERR-INVALID-DELEGATE)))
+    (asserts! (not (is-eq tx-sender delegate-address)) ERR-SELF-DELEGATION)
+    (ok (map-set delegations tx-sender
+      {
+        delegate: delegate-address,
+        delegated-at: burn-block-height
+      }
+    ))
+  )
+)
+
+(define-public (revoke-delegation)
+  (let ((delegation-exists (unwrap! (map-get? delegations tx-sender) ERR-NOT-REGISTERED)))
+    (ok (map-delete delegations tx-sender))
+  )
+)
+
 (define-public (submit-review 
     (startup-id principal)
     (transparency uint)
     (roadmap uint)
     (tokenomics uint))
   (let (
-    (reviewer (unwrap! (map-get? reviewers tx-sender) ERR-NOT-AUTHORIZED))
+    (effective-reviewer (get-effective-reviewer tx-sender))
+    (reviewer (unwrap! (map-get? reviewers effective-reviewer) ERR-NOT-AUTHORIZED))
     (startup (unwrap! (map-get? startups startup-id) ERR-NOT-REGISTERED))
-    (vote-key {reviewer: tx-sender, startup: startup-id})
+    (vote-key {reviewer: effective-reviewer, startup: startup-id})
   )
     (asserts! (is-none (map-get? votes vote-key)) ERR-ALREADY-VOTED)
     (asserts! (and (<= transparency u100) (<= roadmap u100) (<= tokenomics u100)) ERR-INVALID-SCORE)
