@@ -5,10 +5,14 @@
 (define-constant ERR-ALREADY-VOTED (err u104))
 (define-constant ERR-SELF-DELEGATION (err u105))
 (define-constant ERR-INVALID-DELEGATE (err u106))
+(define-constant ERR-INSUFFICIENT-REWARDS (err u107))
+(define-constant ERR-INVALID-AMOUNT (err u108))
 
 (define-data-var min-reviewer-stake uint u10000)
 (define-data-var voting-period uint u144)
 (define-data-var consensus-threshold uint u75)
+(define-data-var reward-pool uint u0)
+(define-data-var base-reward-per-review uint u1000)
 
 (define-map reviewers 
   principal 
@@ -47,6 +51,14 @@
   }
 )
 
+(define-map reward-balances
+  principal
+  {
+    earned: uint,
+    claimed: uint
+  }
+)
+
 (define-read-only (get-startup-details (startup-id principal))
   (match (map-get? startups startup-id)
     startup (ok startup)
@@ -70,6 +82,20 @@
     delegation (get delegate delegation)
     original-reviewer
   )
+)
+
+(define-read-only (get-reward-balance (reviewer principal))
+  (default-to {earned: u0, claimed: u0} (map-get? reward-balances reviewer))
+)
+
+(define-read-only (get-claimable-rewards (reviewer principal))
+  (let ((balance (get-reward-balance reviewer)))
+    (- (get earned balance) (get claimed balance))
+  )
+)
+
+(define-read-only (get-reward-pool-balance)
+  (var-get reward-pool)
 )
 
 (define-public (register-startup (name (string-ascii 50)) (description (string-ascii 256)))
@@ -122,6 +148,33 @@
   )
 )
 
+(define-public (fund-reward-pool (amount uint))
+  (begin
+    (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (var-set reward-pool (+ (var-get reward-pool) amount))
+    (ok amount)
+  )
+)
+
+(define-public (claim-rewards)
+  (let (
+    (claimable (get-claimable-rewards tx-sender))
+    (current-balance (get-reward-balance tx-sender))
+  )
+    (asserts! (> claimable u0) ERR-INSUFFICIENT-REWARDS)
+    (asserts! (>= (var-get reward-pool) claimable) ERR-INSUFFICIENT-REWARDS)
+    
+    (var-set reward-pool (- (var-get reward-pool) claimable))
+    (map-set reward-balances tx-sender
+      {
+        earned: (get earned current-balance),
+        claimed: (get earned current-balance)
+      }
+    )
+    (ok claimable)
+  )
+)
+
 (define-public (submit-review 
     (startup-id principal)
     (transparency uint)
@@ -145,7 +198,8 @@
       }
     )
     
-    (update-startup-scores startup-id transparency roadmap tokenomics)
+    (try! (update-startup-scores startup-id transparency roadmap tokenomics))
+    (distribute-review-reward effective-reviewer)
   )
 )
 
@@ -167,5 +221,25 @@
         registered-at: (get registered-at startup)
       }))
     ERR-NOT-REGISTERED
+  )
+)
+
+(define-private (distribute-review-reward (reviewer principal))
+  (let (
+    (reviewer-data (unwrap-panic (map-get? reviewers reviewer)))
+    (base-reward (var-get base-reward-per-review))
+    (reputation-multiplier (/ (get reputation reviewer-data) u100))
+    (final-reward (* base-reward reputation-multiplier))
+    (current-balance (get-reward-balance reviewer))
+  )
+    (if (> (var-get reward-pool) final-reward)
+      (ok (map-set reward-balances reviewer
+        {
+          earned: (+ (get earned current-balance) final-reward),
+          claimed: (get claimed current-balance)
+        }
+      ))
+      (ok false)
+    )
   )
 )
