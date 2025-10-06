@@ -243,3 +243,20 @@
     )
   )
 )
+
+(define-public (update-startup-info (name (string-ascii 50)) (description (string-ascii 256)))
+  (let ((startup (unwrap! (map-get? startups tx-sender) ERR-NOT-REGISTERED)))
+    (ok (map-set startups tx-sender
+      {
+        name: name,
+        description: description,
+        total-score: (get total-score startup),
+        transparency-score: (get transparency-score startup),
+        roadmap-score: (get roadmap-score startup),
+        tokenomics-score: (get tokenomics-score startup),
+        review-count: (get review-count startup),
+        registered-at: (get registered-at startup)
+      }
+    ))
+  )
+)
