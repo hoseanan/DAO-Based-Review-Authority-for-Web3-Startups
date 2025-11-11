@@ -13,6 +13,7 @@
 (define-data-var consensus-threshold uint u75)
 (define-data-var reward-pool uint u0)
 (define-data-var base-reward-per-review uint u1000)
+(define-data-var withdrawal-cooldown uint u144)
 
 (define-map reviewers 
   principal 
@@ -48,6 +49,13 @@
   {
     delegate: principal,
     delegated-at: uint
+  }
+)
+
+(define-map withdrawal-requests
+  principal
+  {
+    requested-at: uint
   }
 )
 
@@ -258,5 +266,27 @@
         registered-at: (get registered-at startup)
       }
     ))
+  )
+)
+
+(define-public (request-withdrawal)
+  (let ((reviewer (unwrap! (map-get? reviewers tx-sender) ERR-NOT-AUTHORIZED))
+        (delegation (map-get? delegations tx-sender)))
+    (asserts! (is-none delegation) ERR-NOT-AUTHORIZED)
+    (ok (map-set withdrawal-requests tx-sender
+      {
+        requested-at: burn-block-height
+      }
+    ))
+  )
+)
+
+(define-public (withdraw-stake)
+  (let ((request (unwrap! (map-get? withdrawal-requests tx-sender) ERR-NOT-AUTHORIZED))
+        (time-passed (- burn-block-height (get requested-at request))))
+    (asserts! (>= time-passed (var-get withdrawal-cooldown)) ERR-NOT-AUTHORIZED)
+    (map-delete reviewers tx-sender)
+    (map-delete withdrawal-requests tx-sender)
+    (ok true)
   )
 )
